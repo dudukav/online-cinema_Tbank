@@ -1,1 +1,1 @@
-# online-cinema_Tbank
+# Online Cinema: Event Streaming + Analytics Pipeline
