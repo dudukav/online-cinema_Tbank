@@ -10,10 +10,9 @@ Event streaming и аналитический pipeline для онлайн-ки�
 - Schema Registry
 - ClickHouse
 - PostgreSQL
-- Grafana
 - Docker Compose
-- `<твой язык / фреймворк>`
-- `<библиотеки Kafka / ClickHouse / PostgreSQL>`
+- `<Golang>`
+- `<Kafka / ClickHouse / PostgreSQL>`
 
 ## Архитектура
 
