@@ -6,7 +6,7 @@ COPY go.mod go.sum ./
 COPY vendor ./vendor
 COPY . .
 
-RUN CGO_ENABLED=0 go build -o main .
+RUN CGO_ENABLED=0 go build -mod=vendor -o main .
 
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates

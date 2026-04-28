@@ -1,73 +1,65 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 )
 
-func writeToPostgres(
-	date time.Time,
-	dau uint64,
-	avgTime float64,
-	conv float64,
-	retentionHits map[int]uint64,
-	topMovies map[string]uint64,
-) error {
+func writeToPostgres(psql *sql.DB, result AggregationResult) error {
+	var err error
+	backoff := 100 * time.Millisecond
+	for attempt := 0; attempt < 3; attempt++ {
+		err = writeToPostgresOnce(psql, result)
+		if err == nil {
+			return nil
+		}
+		time.Sleep(backoff)
+		backoff *= 2
+	}
+	return err
+}
+
+func writeToPostgresOnce(psql *sql.DB, result AggregationResult) error {
 	tx, err := psql.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	now := time.Now()
-
-	_, err = tx.Exec(
-		`INSERT INTO daily_metrics (date, metric_name, metric_value, computed_at)
-		 VALUES ($1, 'DAU', $2, $3)
-		 ON CONFLICT (date, metric_name) DO UPDATE
-		 SET metric_value = EXCLUDED.metric_value, computed_at = EXCLUDED.computed_at`,
-		date, dau, now,
-	)
-	if err != nil {
-		return err
+	now := time.Now().UTC()
+	metrics := map[string]float64{
+		"DAU":               float64(result.DAU),
+		"avg_view_time":     result.AvgViewTime,
+		"view_started":      float64(result.ViewStarted),
+		"view_finished":     float64(result.ViewFinished),
+		"conversion":        result.Conversion,
+		"processed_records": float64(result.ProcessedRecords),
 	}
 
-	_, err = tx.Exec(
-		`INSERT INTO daily_metrics (date, metric_name, metric_value, computed_at)
-		 VALUES ($1, 'avg_view_time', $2, $3)
-		 ON CONFLICT (date, metric_name) DO UPDATE
-		 SET metric_value = EXCLUDED.metric_value, computed_at = EXCLUDED.computed_at`,
-		date, avgTime, now,
-	)
-	if err != nil {
-		return err
-	}
-
-	_, err = tx.Exec(
-		`INSERT INTO daily_metrics (date, metric_name, metric_value, computed_at)
-		 VALUES ($1, 'conversion', $2, $3)
-		 ON CONFLICT (date, metric_name) DO UPDATE
-		 SET metric_value = EXCLUDED.metric_value, computed_at = EXCLUDED.computed_at`,
-		date, conv, now,
-	)
-	if err != nil {
-		return err
-	}
-
-	// 4. Retention D1, D7
-	for days, count := range retentionHits {
-		if days != 1 && days != 7 {
-			continue
+	for day, retention := range result.Retention {
+		if day == 1 || day == 7 {
+			metrics[fmt.Sprintf("retention_D%d", day)] = retention.Retention
+			metrics[fmt.Sprintf("retention_D%d_users", day)] = float64(retention.ReturningUsers)
 		}
-		name := fmt.Sprintf("retention_D%d", days)
-		_, err = tx.Exec(
+	}
+
+	for _, movie := range result.TopMovies {
+		metrics[fmt.Sprintf("top_movie_views:%s", movie.MovieID)] = float64(movie.Views)
+	}
+
+	for name, value := range metrics {
+		if _, err := tx.Exec(
 			`INSERT INTO daily_metrics (date, metric_name, metric_value, computed_at)
 			 VALUES ($1, $2, $3, $4)
 			 ON CONFLICT (date, metric_name) DO UPDATE
-			 SET metric_value = EXCLUDED.metric_value, computed_at = EXCLUDED.computed_at`,
-			date, name, float64(count), now,
-		)
-		if err != nil {
+			 SET metric_value = EXCLUDED.metric_value,
+			     computed_at = EXCLUDED.computed_at`,
+			result.Date,
+			name,
+			value,
+			now,
+		); err != nil {
 			return err
 		}
 	}

@@ -1,1 +1,1 @@
-# Online Cinema: Event Streaming + Analytics Pipeline
+Online cinema analytics

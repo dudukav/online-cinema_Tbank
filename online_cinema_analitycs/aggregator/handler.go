@@ -28,7 +28,7 @@ func AggregateHandler(ch clickhouse.Conn, psql *sql.DB) http.HandlerFunc {
 		log.Printf("Manual aggregation for %s", dateStr)
 		start := time.Now()
 
-		err = aggregateForDate(date, ch, psql)
+		result, err := aggregateForDate(date, ch, psql)
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusInternalServerError)
 			return
@@ -40,6 +40,8 @@ func AggregateHandler(ch clickhouse.Conn, psql *sql.DB) http.HandlerFunc {
 			"status":   "ok",
 			"date":     dateStr,
 			"duration": elapsed.Seconds(),
+			"records":  result.ProcessedRecords,
+			"dau":      result.DAU,
 		})
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -15,19 +16,19 @@ import (
 )
 
 const (
-	ProducerURL   = "http://localhost:8080/events"
+	ProducerURL   = "http://127.0.0.1:8080/events"
 	ClickHouseDSN = "tcp://localhost:9000"
 )
 
 type EventRequest struct {
-	EventId        string      `json:"event_id"`
-	UserId         string      `json:"user_id"`
-	MovieId        string      `json:"movie_id"`
-	EventType      string      `json:"event_type"`
-	Timestamp      string      `json:"timestamp"`
-	DeviceType     string      `json:"device_type"`
-	SessionId      string      `json:"session_id"`
-	ProgressSeconds int        `json:"progress_seconds"`
+	EventId         string `json:"event_id"`
+	UserId          string `json:"user_id"`
+	MovieId         string `json:"movie_id"`
+	EventType       string `json:"event_type"`
+	Timestamp       string `json:"timestamp"`
+	DeviceType      string `json:"device_type"`
+	SessionId       string `json:"session_id"`
+	ProgressSeconds int    `json:"progress_seconds"`
 }
 
 type ClickhouseEvent struct {
@@ -42,20 +43,29 @@ type ClickhouseEvent struct {
 }
 
 func TestEndToEndEventFlow(t *testing.T) {
+	if os.Getenv("RUN_INTEGRATION_TESTS") != "1" {
+		t.Skip("set RUN_INTEGRATION_TESTS=1 after docker compose up -d")
+	}
+
 	conn, err := clickhouse.Open(&clickhouse.Options{
 		Addr: []string{"127.0.0.1:9000"},
+		Auth: clickhouse.Auth{
+			Database: "default",
+			Username: "analytics",
+			Password: "analytics",
+		},
 	})
 	if err != nil {
 		t.Fatalf("Failed to connect to ClickHouse: %v", err)
 	}
 	defer conn.Close()
 
-	truncate := "ALTER TABLE raw_events DELETE WHERE 1=1"
+	truncate := "ALTER TABLE raw_events DELETE WHERE startsWith(event_id, 'test_event_')"
 	if err := conn.Exec(context.Background(), truncate); err != nil {
 		log.Printf("warn: truncate raw_events failed: %v", err)
 	}
 
-	eventId := "test_event_1"
+	eventId := fmt.Sprintf("test_event_%d", time.Now().UnixNano())
 	reqBody := EventRequest{
 		EventId:         eventId,
 		UserId:          "test_user_1",
@@ -70,8 +80,7 @@ func TestEndToEndEventFlow(t *testing.T) {
 	body, err := json.Marshal(reqBody)
 	require.NoError(t, err)
 
-	resp, err := http.Post(ProducerURL, "application/json", http.NoBody)
-	resp, err = http.Post(
+	resp, err := http.Post(
 		ProducerURL,
 		"application/json",
 		bytes.NewReader(body),

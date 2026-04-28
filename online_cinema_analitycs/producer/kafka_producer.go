@@ -2,106 +2,114 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
 	"time"
 
-	pb "producer/proto/schema"
-
-	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"google.golang.org/protobuf/proto"
+	"github.com/segmentio/kafka-go"
 )
 
-var Topic = "movie-events"
+const Topic = "movie-events"
 
 type KafkaProducer struct {
-	producer *kafka.Producer
+	writer *kafka.Writer
+}
+
+type KafkaEvent struct {
+	EventID         string `json:"event_id"`
+	UserID          string `json:"user_id"`
+	MovieID         string `json:"movie_id"`
+	EventType       string `json:"event_type"`
+	TimestampMs     int64  `json:"timestamp_ms"`
+	DeviceType      string `json:"device_type"`
+	SessionID       string `json:"session_id"`
+	ProgressSeconds int    `json:"progress_seconds"`
 }
 
 func NewKafkaProducer(brokers string) (*KafkaProducer, error) {
-	config := &kafka.ConfigMap{
-		"bootstrap.servers": brokers,
-		"acks":              "all",
-		"enable.idempotence": true,
+	writer := &kafka.Writer{
+		Addr:         kafka.TCP(splitBrokers(brokers)...),
+		Topic:        Topic,
+		Balancer:     &kafka.Hash{},
+		RequiredAcks: kafka.RequireAll,
+		Async:        false,
 	}
 
-	p, err := kafka.NewProducer(config)
-	if err != nil {
-		return nil, err
-	}
-
-	go func() {
-		for e := range p.Events() {
-			switch ev := e.(type) {
-			case *kafka.Message:
-				if ev.TopicPartition.Error != nil {
-					log.Printf("Delivery failed: %v\n", ev.TopicPartition)
-				} else {
-					log.Printf("Delivered event_id=%s, event_type=%s, at=%v",
-						ev.Key, ev.Value, time.Now())
-				}
-			}
-		}
-	}()
-
-	return &KafkaProducer{producer: p}, nil
+	return &KafkaProducer{writer: writer}, nil
 }
 
-func (kp *KafkaProducer) ProduceEvent(ctx context.Context, event *pb.MovieEvent) error {
-	if !isValidEvent(event) {
-		return errInvalidEvent
+func (kp *KafkaProducer) ProduceEvent(ctx context.Context, event KafkaEvent) error {
+	if err := validateKafkaEvent(event); err != nil {
+		return err
 	}
 
-	data, err := proto.Marshal(event)
+	data, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
 
-	key := []byte(event.UserId)
+	msg := kafka.Message{
+		Key:   []byte(event.UserID),
+		Value: data,
+		Time:  time.UnixMilli(event.TimestampMs).UTC(),
+	}
 
 	maxRetries := 3
 	backoff := 100 * time.Millisecond
-
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		err := kp.producer.Produce(&kafka.Message{
-			TopicPartition: kafka.TopicPartition{
-				Topic:     &Topic,
-				Partition: kafka.PartitionAny,
-			},
-			Key:   key,
-			Value: data,
-		}, nil)
-
+		err = kp.writer.WriteMessages(ctx, msg)
 		if err == nil {
+			log.Printf("published event_id=%s event_type=%s timestamp=%s",
+				event.EventID,
+				event.EventType,
+				time.UnixMilli(event.TimestampMs).UTC().Format(time.RFC3339),
+			)
 			return nil
 		}
 
-		log.Printf("Kafka produce failed (attempt %d): %v", attempt+1, err)
-
+		log.Printf("kafka publish failed attempt=%d event_id=%s error=%v", attempt+1, event.EventID, err)
 		if attempt < maxRetries {
-			jitter := time.Duration(50 + rand.Intn(50)) * time.Millisecond
+			jitter := time.Duration(50+rand.Intn(50)) * time.Millisecond
 			time.Sleep(backoff + jitter)
 			backoff *= 2
 		}
 	}
 
-	return err
+	return fmt.Errorf("publish event %s: %w", event.EventID, err)
+}
+
+func (kp *KafkaProducer) Close() error {
+	return kp.writer.Close()
+}
+
+func validateKafkaEvent(event KafkaEvent) error {
+	if event.EventID == "" || event.UserID == "" || event.EventType == "" || event.DeviceType == "" || event.TimestampMs <= 0 {
+		return errInvalidEvent
+	}
+	if isViewEvent(event.EventType) && (event.MovieID == "" || event.SessionID == "") {
+		return errInvalidEvent
+	}
+	return nil
+}
+
+func splitBrokers(brokers string) []string {
+	if brokers == "" {
+		return []string{"localhost:9092"}
+	}
+
+	result := make([]string, 0, 2)
+	start := 0
+	for i := 0; i <= len(brokers); i++ {
+		if i == len(brokers) || brokers[i] == ',' {
+			if start < i {
+				result = append(result, brokers[start:i])
+			}
+			start = i + 1
+		}
+	}
+	return result
 }
 
 var errInvalidEvent = fmt.Errorf("invalid event")
-
-func isValidEvent(event *pb.MovieEvent) bool {
-	if event.UserId == "" || event.EventId == "" {
-		return false
-	}
-	if event.EventType == pb.EventType_VIEW_STARTED ||
-		event.EventType == pb.EventType_VIEW_PAUSED ||
-		event.EventType == pb.EventType_VIEW_RESUMED ||
-		event.EventType == pb.EventType_VIEW_FINISHED {
-		if event.MovieId == "" || event.SessionId == "" {
-			return false
-		}
-	}
-	return true
-}

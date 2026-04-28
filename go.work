@@ -1,0 +1,6 @@
+go 1.25.0
+
+use (
+	./online_cinema_analitycs/aggregator
+	./online_cinema_analitycs/producer
+)
