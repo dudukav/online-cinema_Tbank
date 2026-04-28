@@ -11,8 +11,8 @@ Event streaming и аналитический pipeline для онлайн-ки�
 - ClickHouse
 - PostgreSQL
 - Docker Compose
-- <Golang>
-- <Kafka / ClickHouse / PostgreSQL>
+- Golang
+- Kafka / ClickHouse / PostgreSQL
 
 ## Архитектура
 
