@@ -83,12 +83,14 @@ services:
     ports:
       - "8123:8123"
       - "9000:9000"
+      - "9363:9363"
     environment:
       CLICKHOUSE_DB: default
       CLICKHOUSE_USER: analytics
       CLICKHOUSE_PASSWORD: analytics
     volumes:
       - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./monitoring/clickhouse/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --user analytics --password analytics --query 'SELECT 1' >/dev/null"]
       interval: 10s
@@ -110,6 +112,16 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "9187:9187"
+    environment:
+      DATA_SOURCE_NAME: postgresql://user:pass@postgres:5432/analytics?sslmode=disable
 
   producer:
     build: ./producer
@@ -149,3 +161,43 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.7.0
+    depends_on:
+      kafka-1:
+        condition: service_healthy
+    ports:
+      - "9308:9308"
+    command:
+      - "--kafka.server=kafka-1:29092"
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    depends_on:
+      producer:
+        condition: service_healthy
+      aggregator:
+        condition: service_healthy
+      postgres-exporter:
+        condition: service_started
+      kafka-exporter:
+        condition: service_started
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro

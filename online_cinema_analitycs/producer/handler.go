@@ -38,6 +38,11 @@ func EventsHandler(kp *KafkaProducer) http.HandlerFunc {
 			return
 		}
 
+		movieEventsProducedTotal.WithLabelValues(
+			req.EventType,
+			req.DeviceType,
+		).Inc()
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{

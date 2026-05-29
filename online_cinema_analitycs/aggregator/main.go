@@ -17,7 +17,7 @@ func main() {
 	clickHouseUser := getenv("CLICKHOUSE_USER", "analytics")
 	clickHousePassword := getenv("CLICKHOUSE_PASSWORD", "analytics")
 	postgresURL := getenv("POSTGRES_URL", "postgresql://user:pass@postgres:5432/analytics?sslmode=disable")
-	interval, err := time.ParseDuration(getenv("AGGREGATION_INTERVAL", "10m"))
+	interval, err := time.ParseDuration(getenv("AGGREGATION_INTERVAL", "1m"))
 	if err != nil {
 		log.Fatalf("invalid AGGREGATION_INTERVAL: %v", err)
 	}
@@ -47,16 +47,12 @@ func main() {
 		log.Fatalf("ping postgres: %v", err)
 	}
 
+	mux := route(ch, psql)
+
 	go StartScheduler(interval, func() time.Time {
 		return time.Now().Add(-24 * time.Hour)
 	}, ch, psql)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
-	mux.HandleFunc("/aggregate", AggregateHandler(ch, psql))
 	log.Fatal(http.ListenAndServe(":8081", mux))
 }
 

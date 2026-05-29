@@ -37,19 +37,28 @@ type TopMovieMetric struct {
 func aggregateForDate(date time.Time, ch clickhouse.Conn, psql *sql.DB) (AggregationResult, error) {
 	day := date.UTC().Format("2006-01-02")
 	start := time.Now()
+	status := "success"
+	defer func() {
+		aggregationRunsTotal.WithLabelValues(status).Inc()
+		aggregationDuration.Observe(time.Since(start).Seconds())
+	}()
 
 	if err := materializeClickHouseAggregates(day, ch); err != nil {
+		status = "error"
 		return AggregationResult{}, err
 	}
 
 	result, err := readMaterializedAggregates(day, ch)
 	if err != nil {
+		status = "error"
 		return AggregationResult{}, err
 	}
 
 	if err := writeToPostgres(psql, result); err != nil {
+		status = "error"
 		return AggregationResult{}, err
 	}
+	aggregationRecordsProcessedTotal.Add(float64(result.ProcessedRecords))
 
 	log.Printf(
 		"aggregation finished date=%s processed_records=%d dau=%d conversion=%.4f duration=%s",
