@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Unit tests
+        run: |
+          go test ./online_cinema_analitycs/producer/...
+          go test ./online_cinema_analitycs/aggregator/...
+
+      - name: Build docker images
+        run: |
+          docker compose -f online_cinema_analitycs/docker-compose.yml build
+
+      - name: Start system
+        run: |
+          docker compose -f online_cinema_analitycs/docker-compose.yml up -d
+
+      - name: Wait for services
+        run: |
+          ./online_cinema_analitycs/scripts/wait-for-health.sh
+
+      - name: Integration tests
+        run: |
+          RUN_INTEGRATION_TESTS=1 go test ./online_cinema_analitycs/producer/tests -v
+
+      - name: Metrics check
+        run: |
+          ./online_cinema_analitycs/scripts/check-metrics.sh
+
+      - name: Load test
+        run: |
+          k6 run online_cinema_analitycs/tests/load/events.js
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs
+          path: |
+            online_cinema_analitycs/artifacts/
