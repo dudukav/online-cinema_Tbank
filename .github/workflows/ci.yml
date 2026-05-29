@@ -45,7 +45,12 @@ jobs:
         run: bash online_cinema_analitycs/scripts/check_metrics.sh
 
       - name: Load test
-        run: k6 run online_cinema_analitycs/tests/load/events.js
+        run: |
+          mkdir -p online_cinema_analitycs/artifacts
+          k6 run --summary-export online_cinema_analitycs/artifacts/k6-summary.json online_cinema_analitycs/tests/load/events.js
+
+      - name: SLI check
+        run: bash online_cinema_analitycs/scripts/check_sli.sh
 
       - name: Collect docker compose logs
         if: always()

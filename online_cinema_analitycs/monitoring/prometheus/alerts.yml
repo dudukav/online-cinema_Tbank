@@ -1,0 +1,47 @@
+groups:
+  - name: online-cinema-service-alerts
+    rules:
+      - alert: ServiceTargetDown
+        expr: up{job=~"producer|aggregator"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service target {{ $labels.job }} is down"
+          description: "Prometheus cannot scrape {{ $labels.job }} at {{ $labels.instance }}."
+
+      - alert: HighHTTPErrorRate
+        expr: |
+          (
+            sum(rate(http_request_errors_total[5m])) by (service)
+            /
+            clamp_min(sum(rate(http_requests_total[5m])) by (service), 0.001)
+          ) > 0.05
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP error rate on {{ $labels.service }}"
+          description: "More than 5% of HTTP requests failed during the last 5 minutes."
+
+      - alert: HighHTTPLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, service)
+          ) > 1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p95 HTTP latency on {{ $labels.service }}"
+          description: "p95 HTTP latency is above 1 second during the last 5 minutes."
+
+      - alert: AggregationFailures
+        expr: increase(aggregation_runs_total{status="error"}[10m]) > 0
+        for: 0s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Aggregation failures detected"
+          description: "The aggregator reported at least one failed aggregation run during the last 10 minutes."

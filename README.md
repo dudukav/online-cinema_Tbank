@@ -11,9 +11,11 @@ Event streaming и аналитический pipeline для онлайн-ки�
 - ClickHouse
 - PostgreSQL
 - Docker Compose
-- <Golang>
-- <Kafka / ClickHouse / PostgreSQL>
->>>>>>> 2d2a8b6 (правка readme)
+- Go
+- Prometheus
+- Grafana
+- Alertmanager
+- k6
 
 ## Архитектура
 
@@ -145,12 +147,12 @@ PostgreSQL используется как хранилище готовых м�
 Минимальная структура таблицы:
 
 ```SQL
-CREATE TABLE metrics (
-    metric_date DATE NOT NULL,
-    metric_name TEXT NOT NULL,
-    metric_value DOUBLE PRECISION NOT NULL,
-    calculated_at TIMESTAMP NOT NULL DEFAULT now(),
-    PRIMARY KEY (metric_date, metric_name)
+CREATE TABLE IF NOT EXISTS daily_metrics (
+    date            DATE,
+    metric_name     VARCHAR(128),
+    metric_value    NUMERIC(18, 6),
+    computed_at     TIMESTAMP,
+    UNIQUE(date, metric_name)
 );
 ```
 
@@ -165,6 +167,10 @@ CREATE TABLE metrics (
 Интеграционный тест проверяет полный путь события:
 
 HTTP API → Kafka → ClickHouse Kafka Engine → MergeTree table
+
+E2E тест проверяет пользовательский сценарий:
+
+HTTP API → Kafka → ClickHouse raw events → Aggregation Service → PostgreSQL `daily_metrics`
 
 ## Структура проекта
 ```
@@ -295,6 +301,115 @@ docker compose exec postgres psql -U user -d analytics \
 ```bash
 cd producer
 RUN_INTEGRATION_TESTS=1 go test ./tests -v
+```
+
+### 10. E2E test
+
+```bash
+RUN_E2E_TESTS=1 go test ./tests/e2e -v
+```
+
+### 11. Load test
+
+```bash
+k6 run tests/load/events.js
+```
+
+## CI/CD
+
+Pipeline описан в `.github/workflows/ci.yml` и запускается автоматически на `push` и `pull_request`.
+
+Этапы pipeline:
+
+1. `Unit tests` — быстрые Go-тесты `producer`, `aggregator`, `tests/e2e` без внешних сервисов.
+2. `Build docker images` — сборка Docker-образов через `docker compose build`.
+3. `Start system` — запуск всей системы через `docker compose up -d`.
+4. `Wait for services` — ожидание health endpoints `producer`, `aggregator`, `prometheus`.
+5. `Integration tests` — проверка цепочки `Producer -> Kafka -> ClickHouse`.
+6. `E2E tests` — проверка полного сценария до PostgreSQL.
+7. `Metrics check` — проверка `/metrics` и Prometheus targets.
+8. `Load test` — k6-нагрузка 10 VU в течение 30 секунд с thresholds.
+9. `SLI check` — проверка SLI через Prometheus API.
+10. `Upload artifacts` — сохранение `docker-compose.log` и `k6-summary.json`.
+
+Pipeline падает при любой ошибке, потому что все команды и shell-скрипты возвращают non-zero exit code при нарушении условий.
+
+## Monitoring
+
+Все сервисы и инфраструктура поднимаются одной командой:
+
+```bash
+cd online_cinema_analitycs
+docker compose up -d --build
+```
+
+Основные UI:
+
+- Producer metrics: http://localhost:8080/metrics
+- Aggregator metrics: http://localhost:8082/metrics
+- Prometheus: http://localhost:9090
+- Prometheus targets: http://localhost:9090/targets
+- Grafana: http://localhost:3000 (`admin` / `admin`)
+- Alertmanager: http://localhost:9093
+
+Prometheus scrape config хранится в `monitoring/prometheus/prometheus.yml`.
+
+Сервисные метрики:
+
+- `http_requests_total{service, method, endpoint, status}` — количество HTTP-запросов.
+- `http_request_errors_total{service, method, endpoint, error_type}` — количество HTTP-ошибок.
+- `http_request_duration_seconds_bucket{service, method, endpoint, le}` — histogram длительности HTTP-запросов.
+- `movie_events_produced_total{event_type, device_type}` — количество событий, опубликованных в Kafka.
+- `aggregation_runs_total{status}` — количество запусков агрегации.
+- `aggregation_duration_seconds_bucket{le}` — histogram длительности агрегации.
+- `aggregation_records_processed_total` — количество обработанных raw events.
+
+Инфраструктурные метрики:
+
+- PostgreSQL собирается через `postgres-exporter`.
+- Kafka собирается через `kafka-exporter`.
+- ClickHouse экспортирует `/metrics` через `monitoring/clickhouse/prometheus.xml`.
+
+Grafana provisioning:
+
+- Datasource: `monitoring/grafana/provisioning/datasources/prometheus.yml`
+- Dashboard provider: `monitoring/grafana/provisioning/dashboards/dashboards.yml`
+- Service dashboard: `monitoring/grafana/dashboards/services.json`
+- Infrastructure dashboard: `monitoring/grafana/dashboards/infrastructure.json`
+
+## Alerting
+
+Alert rules хранятся в `monitoring/prometheus/alerts.yml`.
+
+Настроены alerts:
+
+- `ServiceTargetDown` — Prometheus не может scrape-ить `producer` или `aggregator`.
+- `HighHTTPErrorRate` — error rate выше 5% за 5 минут.
+- `HighHTTPLatencyP95` — p95 latency выше 1 секунды за 5 минут.
+- `AggregationFailures` — есть хотя бы один неуспешный запуск агрегации за 10 минут.
+
+Alertmanager поднимается в Docker Compose и доступен на http://localhost:9093.
+
+## SLI/SLO
+
+SLI считаются из реальных Prometheus-метрик. Проверка в CI выполняется скриптом `scripts/check_sli.sh`.
+
+| SLI | PromQL | SLO | Порог отказа |
+|---|---|---:|---:|
+| API availability | `1 - ((sum(rate(http_request_errors_total{service="producer"}[1m])) or vector(0)) / clamp_min(sum(rate(http_requests_total{service="producer"}[1m])), 0.001))` | `>= 99%` | `< 95%` |
+| API p95 latency | `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service="producer"}[1m])) by (le))` | `<= 500ms` | `> 1000ms` |
+| Aggregation success ratio | `(sum(increase(aggregation_runs_total{status="success"}[30m])) or vector(0)) / clamp_min(sum(increase(aggregation_runs_total[30m])), 1)` | `>= 99%` | `< 95%` |
+
+Обоснование порогов:
+
+- API ingestion должен быть быстрым, потому что endpoint только валидирует JSON и публикует событие в Kafka.
+- Availability ниже 95% означает, что пользовательские события массово не принимаются.
+- Ошибки агрегации критичны, потому что PostgreSQL перестает получать готовые аналитические метрики.
+
+Ручная проверка:
+
+```bash
+./scripts/check_sli.sh
 ```
 
 ## Соответствие тз
