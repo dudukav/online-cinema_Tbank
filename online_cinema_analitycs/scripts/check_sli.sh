@@ -46,7 +46,7 @@ echo "Checking system SLI values from Prometheus"
 
 availability="$(query_prometheus '1 - ((sum(rate(http_request_errors_total{service="producer"}[1m])) or vector(0)) / clamp_min(sum(rate(http_requests_total{service="producer"}[1m])), 0.001))')"
 latency_p95="$(query_prometheus 'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service="producer"}[1m])) by (le))')"
-aggregation_success="$(query_prometheus '(sum(increase(aggregation_runs_total{status="success"}[30m])) or vector(0)) / clamp_min(sum(increase(aggregation_runs_total[30m])), 1)')"
+aggregation_success="$(query_prometheus '(sum(aggregation_runs_total{status="success"}) or vector(0)) / clamp_min(sum(aggregation_runs_total), 1)')"
 
 assert_gte "API availability" "${availability}" "0.95"
 assert_lte "API p95 latency seconds" "${latency_p95}" "2.5"
