@@ -55,9 +55,7 @@ func TestMovieEventAggregationFlow(t *testing.T) {
 	defer cancel()
 
 	ch := openClickHouse(t)
-	defer ch.Close()
 	pg := openPostgres(t)
-	defer pg.Close()
 
 	suffix := fmt.Sprintf("%d", time.Now().UTC().UnixNano())
 	eventTime := time.Date(2035, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -71,6 +69,8 @@ func TestMovieEventAggregationFlow(t *testing.T) {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cleanupCancel()
 		cleanupTestData(t, cleanupCtx, ch, pg, date, suffix)
+		_ = ch.Close()
+		_ = pg.Close()
 	})
 
 	startedEventID := "e2e_event_started_" + suffix
@@ -113,7 +113,7 @@ func TestMovieEventAggregationFlow(t *testing.T) {
 		t.Fatalf("expected at least 1 DAU, got %.0f", aggregate.DAU)
 	}
 
-	assertPostgresMetricAtLeast(t, pg, date, "dau", 1)
+	assertPostgresMetricAtLeast(t, pg, date, "DAU", 1)
 	assertPostgresMetricAtLeast(t, pg, date, "view_started", 1)
 	assertPostgresMetricAtLeast(t, pg, date, "view_finished", 1)
 }
