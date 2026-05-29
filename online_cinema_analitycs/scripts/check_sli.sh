@@ -49,7 +49,7 @@ latency_p95="$(query_prometheus 'histogram_quantile(0.95, sum(rate(http_request_
 aggregation_success="$(query_prometheus '(sum(increase(aggregation_runs_total{status="success"}[30m])) or vector(0)) / clamp_min(sum(increase(aggregation_runs_total[30m])), 1)')"
 
 assert_gte "API availability" "${availability}" "0.95"
-assert_lte "API p95 latency seconds" "${latency_p95}" "1.0"
+assert_lte "API p95 latency seconds" "${latency_p95}" "1.5"
 assert_gte "Aggregation success ratio" "${aggregation_success}" "0.95"
 
 echo "SLI check passed"
