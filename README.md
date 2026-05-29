@@ -397,7 +397,7 @@ SLI считаются из реальных Prometheus-метрик. Прове
 | SLI | PromQL | SLO | Порог отказа |
 |---|---|---:|---:|
 | API availability | `1 - ((sum(rate(http_request_errors_total{service="producer"}[1m])) or vector(0)) / clamp_min(sum(rate(http_requests_total{service="producer"}[1m])), 0.001))` | `>= 99%` | `< 95%` |
-| API p95 latency | `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service="producer"}[1m])) by (le))` | `<= 1000ms` | `> 1500ms` |
+| API p95 latency | `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service="producer"}[1m])) by (le))` | `<= 1500ms` | `> 2500ms` |
 | Aggregation success ratio | `(sum(increase(aggregation_runs_total{status="success"}[30m])) or vector(0)) / clamp_min(sum(increase(aggregation_runs_total[30m])), 1)` | `>= 99%` | `< 95%` |
 
 Обоснование порогов:
