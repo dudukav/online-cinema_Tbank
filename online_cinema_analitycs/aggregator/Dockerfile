@@ -3,10 +3,11 @@ FROM golang:1.25 AS builder
 WORKDIR /app
 
 COPY go.mod go.sum ./
-COPY vendor ./vendor
+RUN go mod download
+
 COPY . .
 
-RUN CGO_ENABLED=0 go build -mod=vendor -o main .
+RUN CGO_ENABLED=0 go build -mod=mod -o main .
 
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates
