@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Setup k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Unit tests
+        run: |
+          go test ./online_cinema_analitycs/producer/...
+          go test ./online_cinema_analitycs/aggregator/...
+          go test ./online_cinema_analitycs/tests/e2e/...
+
+      - name: Build docker images
+        run: docker compose -f online_cinema_analitycs/docker-compose.yml build
+
+      - name: Start system
+        run: docker compose -f online_cinema_analitycs/docker-compose.yml up -d
+
+      - name: Wait for services
+        run: bash online_cinema_analitycs/scripts/wait_for_health.sh
+
+      - name: Integration tests
+        run: RUN_INTEGRATION_TESTS=1 go test ./online_cinema_analitycs/producer/tests -v
+
+      - name: E2E tests
+        run: RUN_E2E_TESTS=1 go test ./online_cinema_analitycs/tests/e2e -v
+
+      - name: Metrics check
+        run: bash online_cinema_analitycs/scripts/check_metrics.sh
+
+      - name: Load test
+        run: k6 run online_cinema_analitycs/tests/load/events.js
+
+      - name: Collect docker compose logs
+        if: always()
+        run: |
+          mkdir -p online_cinema_analitycs/artifacts
+          docker compose -f online_cinema_analitycs/docker-compose.yml logs > online_cinema_analitycs/artifacts/docker-compose.log
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs
+          path: online_cinema_analitycs/artifacts/
+
+      - name: Stop system
+        if: always()
+        run: docker compose -f online_cinema_analitycs/docker-compose.yml down -v
